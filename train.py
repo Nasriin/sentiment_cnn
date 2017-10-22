@@ -1,65 +1,85 @@
 import data_helpers
 import tensorflow as tf
+import numpy as np
+from tensorflow.contrib.keras.python.keras.datasets import imdb
 from cnn import CNN
 
-# Parameters
-# ==================================================
 
-# Data loading params
-tf.flags.DEFINE_string("positive_data_file", "./data/rt-polaritydata/rt-polarity.pos", "Data source for the positive data.")
-tf.flags.DEFINE_string("negative_data_file", "./data/rt-polaritydata/rt-polarity.neg", "Data source for the negative data.")
-
-FLAGS = tf.flags.FLAGS
-FLAGS._parse_flags()
-print("\nParameters:")
-for attr, value in sorted(FLAGS.__flags.items()):
-    print("{}={}".format(attr.upper(), value))
-print("")
-
-# Data Preparation
-# ==================================================
+print("Loading data...")
+top_words = 5000 # Collection frequency
+num_classes = 2
+num_filters = 15
+max_len = 100 # check the data_analysis.ipynb for a box plot.
+embedding_size = 10
+batch_size = 100
+epocs = 10
 
 # Load data
-print("Loading data...")
-x_text, y = data_helpers.load_data_and_labels(FLAGS.positive_data_file, FLAGS.negative_data_file)
+(x_train, y_train), (x_test, y_test) = imdb.load_data(num_words= top_words)
+
+padded_x_train = []
+for x in x_train:
+    if len(x) < max_len:
+        x += [0] * (max_len - len(x))
+    x = x[:max_len]
+    padded_x_train.append(x)
+
+expanded_y = []
+for y in y_train:
+    if y == 0:
+        expanded_y.append([0, 1])
+    else:
+        expanded_y.append([1, 0])
+
+y_train = np.array(expanded_y)
+x_train = np.array(padded_x_train)
+
+input_x = tf.placeholder(tf.int32, [None, max_len], name="input_x")
+input_y = tf.placeholder(tf.float32, [None, num_classes], name="input_y")
 
 # Training
-# ==================================================
+embedding = tf.Variable(tf.random_uniform([top_words, embedding_size], -1.0, 1.0))
+embedded_input_x = tf.nn.embedding_lookup(embedding, input_x)
+print(embedded_input_x.get_shape())
+embedded_input_x = tf.reshape(embedded_input_x, [-1, max_len, 1, embedding_size])
+print(embedded_input_x.get_shape())
 
-# cross_entropy = tf.reduce_mean(
-#     tf.nn.softmax_cross_entropy_with_logits(labels=y_, logits=y_conv))
-train_step = tf.train.AdamOptimizer(1e-4).minimize(cross_entropy)
-correct_prediction = tf.equal(tf.argmax(y_conv, 1), tf.argmax(y_, 1))
-accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+# Convolutional network
 
+# Convolutional Layer #1
+conv1 = tf.layers.conv2d(embedded_input_x, num_filters, [5, embedding_size], padding = "same")
+print(conv1.get_shape())
+
+# Pooling Layer #1
+pool1 = tf.layers.max_pooling2d(inputs=conv1, pool_size=[max_len, 1], strides=1)
+print(pool1.get_shape())
+pool1 = tf.contrib.layers.flatten(pool1)
+
+logits = tf.layers.dense(pool1, units=num_classes)
+prediction = tf.nn.softmax(logits)
+
+loss = tf.nn.softmax_cross_entropy_with_logits(labels=input_y, logits=logits)
+optimizer = tf.train.AdamOptimizer()
+train_op = optimizer.minimize(loss)
+
+promt = 100
 with tf.Session() as sess:
-    cnn = CNN(
-        sequence_length=x_train.shape[1],
-        num_classes=y_train.shape[1],
-        # vocab_size=len(vocab_processor.vocabulary_),
-        # embedding_size=FLAGS.embedding_dim,
-        # filter_sizes=list(map(int, FLAGS.filter_sizes.split(","))),
-        # num_filters=FLAGS.num_filters,
-        # l2_reg_lambda=FLAGS.l2_reg_lambda
-    )
-
-    # Define Training procedure
-    # global_step = tf.Variable(0, name="global_step", trainable=False)
-    # optimizer = tf.train.AdamOptimizer(1e-3)
-    # grads_and_vars = optimizer.compute_gradients(cnn.loss)
-    # train_op = optimizer.apply_gradients(grads_and_vars, global_step=global_step)
-
     sess.run(tf.global_variables_initializer())
-    # Training loop.
-    for i in range(20000):
-    batch = mnist.train.next_batch(50)
+    for ep in range(epocs):
+        avg_loss = 0.0
+        for i in range(x_train.shape[0] // batch_size):
+            start_index = i * batch_size
+            feed_dict = {
+                input_x: x_train[start_index:start_index+batch_size],
+                input_y: y_train[start_index:start_index+batch_size]
+            }
+            fetches = [loss, train_op]
+            l, _ = sess.run(fetches, feed_dict)
+            avg_loss += np.average(l)
+            if i % promt == 0:
+                print(avg_loss/promt)
+                avg_loss = 0.0
 
-    if i % 100 == 0:
-      train_accuracy = accuracy.eval(feed_dict={
-          x: batch[0], y_: batch[1], keep_prob: 1.0})
-      print('step %d, training accuracy %g' % (i, train_accuracy))
 
-train_step.run(feed_dict={x: batch[0], y_: batch[1], keep_prob: 0.5})
-
-  print('test accuracy %g' % accuracy.eval(feed_dict={
-      x: mnist.test.images, y_: mnist.test.labels, keep_prob: 1.0}))
+if __name__ == '__main__':
+    print('start')
